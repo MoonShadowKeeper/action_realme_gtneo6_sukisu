@@ -5,15 +5,15 @@ on:
 
 env:
   RETENTION_COUNT: 5
-  CPU: 'sm8635'
-  FEIL: 'realme_gt_neo6'
-  CPUD: 'pineapple'
-  ANDROID_VERSION: 'android14'
-  KERNEL_VERSION: '6.1'
-  KERNEL_NAME: '-android14-SukiSU-bale'
+  CPU: sm8635
+  FEIL: realme_gt_neo6
+  CPUD: pineapple
+  ANDROID_VERSION: android14
+  KERNEL_VERSION: "6.1"
+  KERNEL_NAME: "-android14-SukiSU-bale"
   KERNELSU_VARIANT: SukiSU-Ultra
   KERNELSU_VERSION: main
-  SUSFS_ENABLED: true
+  SUSFS_ENABLED: "true"
   VFS_patch_ENABLED: enable
 
 jobs:
@@ -31,10 +31,10 @@ jobs:
           root-reserve-mb: 8192
           temp-reserve-mb: 2048
           swap-size-mb: 8192
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
 
       - name: Configure Git
         run: |
@@ -54,6 +54,7 @@ jobs:
 
       - name: Initialize repo and sync
         run: |
+          set -e
           mkdir kernel_workspace && cd kernel_workspace
           repo init -u https://github.com/realme-pineapple-devs/kernel_manifest.git -b refs/heads/realme/${{ env.CPU }} -m ${{ env.FEIL }}.xml --depth=1
           repo sync -c
@@ -63,39 +64,33 @@ jobs:
           sed -i 's/ -dirty//g' kernel_platform/msm-kernel/scripts/setlocalversion
           sed -i 's/ -dirty//g' kernel_platform/external/dtc/scripts/setlocalversion
 
-      - name: SukiSU branch switch var
+      - name: Set SukiSU branch flag
         if: ${{ env.KERNELSU_VARIANT == 'SukiSU-Ultra' || env.KERNELSU_VARIANT == 'SukiSU' }}
         run: |
-          if [[ "${{ env.KERNELSU_VERSION }}" == "tag" ]]; then
-            echo "BRANCH=-" >> $GITHUB_ENV
+          if [ "${{ env.KERNELSU_VERSION }}" = "tag" ]; then
+            echo "BRANCH=-" >> "$GITHUB_ENV"
           else
-            echo "BRANCH=-s susfs-main" >> $GITHUB_ENV
+            echo "BRANCH=-s susfs-main" >> "$GITHUB_ENV"
           fi
 
-      # Важный шаг: патчи SukiSU, затем замена KernelSU на полноценный git-репозиторий
-      - name: Integrate KernelSU as real git repo (SukiSU-Ultra)
+      # SukiSU-Ultra: применяем патчи и заменяем KernelSU на полноценный git-репозиторий
+      - name: Integrate KernelSU (SukiSU-Ultra)
         if: ${{ env.KERNELSU_VARIANT == 'SukiSU-Ultra' }}
         id: ksu_version_suu
         run: |
           set -e
           cd kernel_workspace/kernel_platform
-          # 1) Патчим дерево SukiSU-Ultra (вносит изменения в Kconfig/Makefile)
           curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash ${{ env.BRANCH }}
-
-          # 2) Заменяем скопированную папку KernelSU на полноценный git-репозиторий
           rm -rf KernelSU
           git clone https://github.com/tiann/KernelSU.git KernelSU
           cd KernelSU
-          git fetch --tags
-
-          # 3) Считаем версию: 40000 + количество коммитов
           COMMITS=$(git rev-list --count HEAD)
           KSU_VERSION=$((40000 + COMMITS))
-          echo "KSUVER=${KSU_VERSION}" >> $GITHUB_ENV
-          echo "ksuuver=${KSU_VERSION}" >> $GITHUB_OUTPUT
-          echo "KSU_VERSION=${KSU_VERSION}" >> $GITHUB_ENV
+          echo "KSUVER=${KSU_VERSION}" >> "$GITHUB_ENV"
+          echo "ksuuver=${KSU_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "KSU_VERSION=${KSU_VERSION}" >> "$GITHUB_ENV"
 
-      - name: Integrate KernelSU as real git repo (SukiSU)
+      - name: Integrate KernelSU (SukiSU)
         if: ${{ env.KERNELSU_VARIANT == 'SukiSU' }}
         id: ksu_version_su
         run: |
@@ -105,16 +100,16 @@ jobs:
           rm -rf KernelSU
           git clone https://github.com/tiann/KernelSU.git KernelSU
           cd KernelSU
-          git fetch --tags
           COMMITS=$(git rev-list --count HEAD)
           KSU_VERSION=$((40000 + COMMITS))
-          echo "KSUVER=${KSU_VERSION}" >> $GITHUB_ENV
-          echo "ksuver=${KSU_VERSION}" >> $GITHUB_OUTPUT
-          echo "KSU_VERSION=${KSU_VERSION}" >> $GITHUB_ENV
+          echo "KSUVER=${KSU_VERSION}" >> "$GITHUB_ENV"
+          echo "ksuver=${KSU_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "KSU_VERSION=${KSU_VERSION}" >> "$GITHUB_ENV"
 
-      - name: Apply SUSFS Patches SukiSU
+      - name: Apply SUSFS patches
         if: ${{ env.SUSFS_ENABLED == 'true' }}
         run: |
+          set -e
           cd kernel_workspace
           git clone https://github.com/ShirkNeko/susfs4ksu.git -b gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
@@ -122,86 +117,88 @@ jobs:
           cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
           cp ../susfs4ksu/kernel_patches/fs/* ./common/fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
-          cd ./common
+          cd common
           patch -p1 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
 
-      - name: Apply New Hooks Patches
+      - name: Apply VFS hooks
         if: ${{ env.VFS_patch_ENABLED == 'enable' }}
         run: |
+          set -e
           cd kernel_workspace/kernel_platform/common
           cp ../../SukiSU_patch/hooks/scope_min_manual_hooks_v1.6.patch ./
           patch -p1 -F 3 < scope_min_manual_hooks_v1.6.patch || true
 
-      - name: Add KSU/SUSFS configs
+      - name: Append KSU/SUSFS configs
         run: |
+          set -e
           cd kernel_workspace/kernel_platform
-          echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
-          if [[ "${{ env.KERNELSU_VARIANT }}" == "SukiSU-Ultra" ]]; then
-            echo "CONFIG_KPM=y" >> ./common/arch/arm64/configs/gki_defconfig
+          CFG=./common/arch/arm64/configs/gki_defconfig
+          printf "%s\n" "CONFIG_KSU=y" >> "$CFG"
+          if [ "${{ env.KERNELSU_VARIANT }}" = "SukiSU-Ultra" ]; then
+            printf "%s\n" "CONFIG_KPM=y" >> "$CFG"
           fi
-          if [[ "${{ env.VFS_patch_ENABLED }}" == 'enable' ]]; then
-            echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_MANUAL_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
+          if [ "${{ env.VFS_patch_ENABLED }}" = "enable" ]; then
+            printf "%s\n" "CONFIG_KSU_SUSFS_SUS_SU=n" >> "$CFG"
+            printf "%s\n" "CONFIG_KSU_MANUAL_HOOK=y" >> "$CFG"
           else
-            echo "CONFIG_KSU_SUSFS_SUS_SU=y" >> ./common/arch/arm64/configs/gki_defconfig
+            printf "%s\n" "CONFIG_KSU_SUSFS_SUS_SU=y" >> "$CFG"
           fi
-          cat <<'EOF' >> ./common/arch/arm64/configs/gki_defconfig
-CONFIG_KSU_SUSFS=y
-CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
-CONFIG_KSU_SUSFS_SUS_PATH=y
-CONFIG_KSU_SUSFS_SUS_MOUNT=y
-CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
-CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
-CONFIG_KSU_SUSFS_SUS_KSTAT=y
-CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n
-CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
-CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-CONFIG_KSU_SUSFS_ENABLE_LOG=y
-CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-EOF
+          printf "%s\n" \
+            "CONFIG_KSU_SUSFS=y" \
+            "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" \
+            "CONFIG_KSU_SUSFS_SUS_PATH=y" \
+            "CONFIG_KSU_SUSFS_SUS_MOUNT=y" \
+            "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" \
+            "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" \
+            "CONFIG_KSU_SUSFS_SUS_KSTAT=y" \
+            "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n" \
+            "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" \
+            "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y" \
+            "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" \
+            "CONFIG_KSU_SUSFS_ENABLE_LOG=y" \
+            "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" \
+            "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" \
+            "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" \
+            >> "$CFG"
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      - name: Add make name
+      - name: Set build name
         run: |
           cd kernel_workspace/kernel_platform
-          if [[ "${{ env.KERNEL_VERSION }}" == "6.1" || "${{ env.KERNEL_VERSION }}" == "6.6" ]]; then
-            sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
+          if [ "${{ env.KERNEL_VERSION }}" = "6.1" ] || [ "${{ env.KERNEL_VERSION }}" = "6.6" ]; then
+            sed -i '/stable_scmversion_cmd/s/-maybe-dirty//g' ./build/kernel/kleaf/impl/stamp.bzl
           fi
           sed -i '$s|echo "\$res"|echo "\${{ env.KERNEL_NAME }}"|' ./common/scripts/setlocalversion
 
       - name: Build kernel
         run: |
+          set -e
           cd kernel_workspace
-          if [[ "${{ env.KERNEL_VERSION }}" == "6.1" || "${{ env.KERNEL_VERSION }}" == "6.6" ]]; then
+          if [ "${{ env.KERNEL_VERSION }}" = "6.1" ] || [ "${{ env.KERNEL_VERSION }}" = "6.6" ]; then
             ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} gki --action_env=KSU_VERSION
           else
             LTO=thin ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ env.CPUD }} gki
           fi
 
-      - name: Make AnyKernel3
+      - name: Collect Image
         run: |
+          set -e
           git clone https://github.com/Kernel-SU/AnyKernel3 --depth=1
           rm -rf ./AnyKernel3/.git
           dir1="./kernel_workspace/kernel_platform/out/msm-kernel-${{ env.CPUD }}-gki/dist/"
           dir2="./kernel_workspace/kernel_platform/common/out/arch/arm64/boot/"
           dir3="./kernel_workspace/kernel_platform/out/msm-${{ env.CPUD }}-${{ env.CPUD }}-gki/dist/"
-          if find "$dir1" -name Image | grep -q Image; then image_path="${dir1}Image"
-          elif find "$dir2" -name Image | grep -q Image; then image_path="${dir2}Image"
-          elif find "$dir3" -name Image | grep -q Image; then image_path="${dir3}Image"
-          else image_path=$(find "./kernel_workspace/kernel_platform/common/out/" -name Image | head -n 1); fi
-          if [[ -n "$image_path" && -f "$image_path" ]]; then
-            mkdir -p "$dir1"
-            cp -f "$image_path" "$dir1"
-          else
-            echo "Image not found"; exit 1
-          fi
+          image_path=""
+          if [ -f "${dir1}Image" ]; then image_path="${dir1}Image"; fi
+          if [ -z "$image_path" ] && [ -f "${dir2}Image" ]; then image_path="${dir2}Image"; fi
+          if [ -z "$image_path" ] && [ -f "${dir3}Image" ]; then image_path="${dir3}Image"; fi
+          if [ -z "$image_path" ]; then image_path=$(find "./kernel_workspace/kernel_platform/common/out/" -name Image | head -n 1); fi
+          test -n "$image_path" && cp -f "$image_path" "./kernel_workspace/kernel_platform/out/msm-kernel-${{ env.CPUD }}-gki/dist/Image"
 
-      - name: Apply patch_linux and replace Image
+      - name: Apply patch_linux and export Image (Ultra)
         if: ${{ env.KERNELSU_VARIANT == 'SukiSU-Ultra' }}
         run: |
+          set -e
           cd kernel_workspace/kernel_platform/out/msm-kernel-${{ env.CPUD }}-gki/dist
           curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o patch_linux
           chmod +x patch_linux
@@ -209,17 +206,21 @@ EOF
           rm -f Image
           mv oImage Image
           cp Image $GITHUB_WORKSPACE/AnyKernel3/Image
+          mkdir -p $GITHUB_WORKSPACE/kernel_workspace/kernel
           cp Image $GITHUB_WORKSPACE/kernel_workspace/kernel
 
-      - name: Reproduction of documents
+      - name: Export Image (SukiSU)
         if: ${{ env.KERNELSU_VARIANT == 'SukiSU' }}
         run: |
+          set -e
           cd kernel_workspace/kernel_platform/out/msm-kernel-${{ env.CPUD }}-gki/dist
           cp Image $GITHUB_WORKSPACE/AnyKernel3/Image
+          mkdir -p $GITHUB_WORKSPACE/kernel_workspace/kernel
           cp Image $GITHUB_WORKSPACE/kernel_workspace/kernel
 
-      - name: Package artifact
+      - name: Package artifacts
         run: |
+          set -e
           cd $GITHUB_WORKSPACE/AnyKernel3
           zip -r ../AnyKernel3_KernelSU_${{ env.KSUVER }}_${{ env.FEIL }}.zip ./*
           cd $GITHUB_WORKSPACE/kernel_workspace
@@ -232,4 +233,3 @@ EOF
           path: |
             *.zip
           retention-days: 1
-
