@@ -73,7 +73,6 @@ jobs:
             echo "BRANCH=-s susfs-main" >> "$GITHUB_ENV"
           fi
 
-      # SukiSU-Ultra: применяем патчи и заменяем KernelSU на полноценный git-репозиторий
       - name: Integrate KernelSU (SukiSU-Ultra)
         if: ${{ env.KERNELSU_VARIANT == 'SukiSU-Ultra' }}
         id: ksu_version_suu
@@ -81,9 +80,8 @@ jobs:
           set -e
           cd kernel_workspace/kernel_platform
           curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash ${{ env.BRANCH }}
-          rm -rf KernelSU
-          git clone https://github.com/tiann/KernelSU.git KernelSU
           cd KernelSU
+          git fetch --tags
           COMMITS=$(git rev-list --count HEAD)
           KSU_VERSION=$((40000 + COMMITS))
           echo "KSUVER=${KSU_VERSION}" >> "$GITHUB_ENV"
@@ -97,9 +95,8 @@ jobs:
           set -e
           cd kernel_workspace/kernel_platform
           curl -LSs "https://raw.githubusercontent.com/ShirkNeko/KernelSU/main/kernel/setup.sh" | bash ${{ env.BRANCH }}
-          rm -rf KernelSU
-          git clone https://github.com/tiann/KernelSU.git KernelSU
           cd KernelSU
+          git fetch --tags
           COMMITS=$(git rev-list --count HEAD)
           KSU_VERSION=$((40000 + COMMITS))
           echo "KSUVER=${KSU_VERSION}" >> "$GITHUB_ENV"
@@ -133,33 +130,33 @@ jobs:
           set -e
           cd kernel_workspace/kernel_platform
           CFG=./common/arch/arm64/configs/gki_defconfig
-          printf "%s\n" "CONFIG_KSU=y" >> "$CFG"
+          echo "CONFIG_KSU=y" >> "$CFG"
           if [ "${{ env.KERNELSU_VARIANT }}" = "SukiSU-Ultra" ]; then
-            printf "%s\n" "CONFIG_KPM=y" >> "$CFG"
+            echo "CONFIG_KPM=y" >> "$CFG"
           fi
           if [ "${{ env.VFS_patch_ENABLED }}" = "enable" ]; then
-            printf "%s\n" "CONFIG_KSU_SUSFS_SUS_SU=n" >> "$CFG"
-            printf "%s\n" "CONFIG_KSU_MANUAL_HOOK=y" >> "$CFG"
+            echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> "$CFG"
+            echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$CFG"
           else
-            printf "%s\n" "CONFIG_KSU_SUSFS_SUS_SU=y" >> "$CFG"
+            echo "CONFIG_KSU_SUSFS_SUS_SU=y" >> "$CFG"
           fi
-          printf "%s\n" \
-            "CONFIG_KSU_SUSFS=y" \
-            "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" \
-            "CONFIG_KSU_SUSFS_SUS_PATH=y" \
-            "CONFIG_KSU_SUSFS_SUS_MOUNT=y" \
-            "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" \
-            "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" \
-            "CONFIG_KSU_SUSFS_SUS_KSTAT=y" \
-            "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n" \
-            "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" \
-            "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y" \
-            "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" \
-            "CONFIG_KSU_SUSFS_ENABLE_LOG=y" \
-            "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" \
-            "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" \
-            "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" \
-            >> "$CFG"
+          cat >> "$CFG" <<EOF
+CONFIG_KSU_SUSFS=y
+CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
+CONFIG_KSU_SUSFS_SUS_PATH=y
+CONFIG_KSU_SUSFS_SUS_MOUNT=y
+CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+CONFIG_KSU_SUSFS_SUS_KSTAT=y
+CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n
+CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
+CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+CONFIG_KSU_SUSFS_ENABLE_LOG=y
+CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+EOF
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
       - name: Set build name
@@ -189,11 +186,11 @@ jobs:
           dir2="./kernel_workspace/kernel_platform/common/out/arch/arm64/boot/"
           dir3="./kernel_workspace/kernel_platform/out/msm-${{ env.CPUD }}-${{ env.CPUD }}-gki/dist/"
           image_path=""
-          if [ -f "${dir1}Image" ]; then image_path="${dir1}Image"; fi
-          if [ -z "$image_path" ] && [ -f "${dir2}Image" ]; then image_path="${dir2}Image"; fi
-          if [ -z "$image_path" ] && [ -f "${dir3}Image" ]; then image_path="${dir3}Image"; fi
-          if [ -z "$image_path" ]; then image_path=$(find "./kernel_workspace/kernel_platform/common/out/" -name Image | head -n 1); fi
-          test -n "$image_path" && cp -f "$image_path" "./kernel_workspace/kernel_platform/out/msm-kernel-${{ env.CPUD }}-gki/dist/Image"
+          for d in "$dir1" "$dir2" "$dir3"; do
+            [ -f "${d}Image" ] && image_path="${d}Image" && break
+          done
+          [ -z "$image_path" ] && image_path=$(find "./kernel_workspace/kernel_platform/common/out/" -name Image | head -n 1)
+          test -n "$image_path" && cp -f "$image_path" "$dir1/Image"
 
       - name: Apply patch_linux and export Image (Ultra)
         if: ${{ env.KERNELSU_VARIANT == 'SukiSU-Ultra' }}
@@ -203,7 +200,6 @@ jobs:
           curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o patch_linux
           chmod +x patch_linux
           ./patch_linux
-          rm -f Image
           mv oImage Image
           cp Image $GITHUB_WORKSPACE/AnyKernel3/Image
           mkdir -p $GITHUB_WORKSPACE/kernel_workspace/kernel
