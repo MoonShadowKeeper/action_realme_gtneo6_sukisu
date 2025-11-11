@@ -20,10 +20,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    outputs:
-      ksuuver: ${{ steps.ksu_version_suu.outputs.ksuuver }}
-      ksuver: ${{ steps.ksu_version_su.outputs.ksuver }}
-
     steps:
       - name: Maximize build space
         uses: easimon/maximize-build-space@master
@@ -75,7 +71,6 @@ jobs:
 
       - name: Integrate KernelSU (SukiSU-Ultra)
         if: ${{ env.KERNELSU_VARIANT == 'SukiSU-Ultra' }}
-        id: ksu_version_suu
         run: |
           set -e
           cd kernel_workspace/kernel_platform
@@ -85,7 +80,6 @@ jobs:
           COMMITS=$(git rev-list --count HEAD)
           KSU_VERSION=$((40000 + COMMITS))
           echo "KSUVER=${KSU_VERSION}" >> "$GITHUB_ENV"
-          echo "ksuuver=${KSU_VERSION}" >> "$GITHUB_OUTPUT"
           echo "KSU_VERSION=${KSU_VERSION}" >> "$GITHUB_ENV"
 
       - name: Apply SUSFS patches
@@ -105,6 +99,7 @@ jobs:
       - name: Apply VFS hooks
         if: ${{ env.VFS_patch_ENABLED == 'enable' }}
         run: |
+          set -e
           cd kernel_workspace/kernel_platform/common
           cp ../../SukiSU_patch/hooks/scope_min_manual_hooks_v1.6.patch ./
           patch -p1 -F 3 < scope_min_manual_hooks_v1.6.patch || true
@@ -151,6 +146,7 @@ jobs:
 
       - name: Build kernel
         run: |
+          set -e
           cd kernel_workspace
           if [ "${{ env.KERNEL_VERSION }}" = "6.1" ] || [ "${{ env.KERNEL_VERSION }}" = "6.6" ]; then
             ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} gki --action_env=KSU_VERSION
@@ -160,15 +156,27 @@ jobs:
 
       - name: Collect Image
         run: |
+          set -e
           git clone https://github.com/Kernel-SU/AnyKernel3 --depth=1
           rm -rf ./AnyKernel3/.git
           dir1="./kernel_workspace/kernel_platform/out/msm-kernel-${{ env.CPUD }}-gki/dist/"
           image_path=$(find ./kernel_workspace/kernel_platform -name Image | head -n 1)
-          cp -f "$image_path" "$dir1/Image" || exit 1
+          if [ -n "$image_path" ]; then
+            mkdir -p "$dir1"
+            if [ "$(realpath "$image_path")" != "$(realpath "${dir1}Image")" ]; then
+              cp -f "$image_path" "${dir1}Image"
+            else
+              echo "Image уже в целевом каталоге — пропуск копирования"
+            fi
+          else
+            echo "Image не найден"
+            exit 1
+          fi
 
       - name: Apply patch_linux and export Image (Ultra)
         if: ${{ env.KERNELSU_VARIANT == 'SukiSU-Ultra' }}
         run: |
+          set -e
           cd kernel_workspace/kernel_platform/out/msm-kernel-${{ env.CPUD }}-gki/dist
           curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o patch_linux
           chmod +x patch_linux
@@ -180,6 +188,7 @@ jobs:
 
       - name: Package artifacts
         run: |
+          set -e
           cd $GITHUB_WORKSPACE/AnyKernel3
           zip -r ../AnyKernel3_KernelSU_${{ env.KSUVER }}_${{ env.FEIL }}.zip ./*
           cd $GITHUB_WORKSPACE/kernel_workspace
