@@ -5,20 +5,24 @@ on:
 
 env:
   RETENTION_COUNT: 5
-  CPU: sm8635
-  FEIL: realme_gt_neo6
-  CPUD: pineapple
-  ANDROID_VERSION: android14
-  KERNEL_VERSION: "6.1"
-  KERNEL_NAME: "-android14-SukiSU-bale"
+  CPU: 'sm8635'
+  FEIL: 'realme_gt_neo6'
+  CPUD: 'pineapple'
+  ANDROID_VERSION: 'android14'
+  KERNEL_VERSION: '6.1'
+  KERNEL_NAME: '-android14-SukiSU-bale'
   KERNELSU_VARIANT: SukiSU-Ultra
   KERNELSU_VERSION: main
-  SUSFS_ENABLED: "true"
+  SUSFS_ENABLED: true
   VFS_patch_ENABLED: enable
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    outputs:
+      ksuuver: ${{ steps.ksu_version_suu.outputs.ksuuver }}
+      ksuver: ${{ steps.ksu_version_su.outputs.ksuver }}
 
     steps:
       - name: Maximize build space
@@ -27,10 +31,10 @@ jobs:
           root-reserve-mb: 8192
           temp-reserve-mb: 2048
           swap-size-mb: 8192
-          remove-dotnet: "true"
-          remove-android: "true"
-          remove-haskell: "true"
-          remove-codeql: "true"
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
 
       - name: Configure Git
         run: |
@@ -39,85 +43,100 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt update
+          sudo apt update && sudo apt upgrade -y
           sudo apt install -y python3 git curl
 
       - name: Install repo tool
         run: |
-          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
           chmod a+x ~/repo
           sudo mv ~/repo /usr/local/bin/repo
 
       - name: Initialize repo and sync
         run: |
-          set -e
           mkdir kernel_workspace && cd kernel_workspace
           repo init -u https://github.com/realme-pineapple-devs/kernel_manifest.git -b refs/heads/realme/${{ env.CPU }} -m ${{ env.FEIL }}.xml --depth=1
-          repo sync -c
-          rm kernel_platform/common/android/abi_gki_protected_exports_* || true
-          rm kernel_platform/msm-kernel/android/abi_gki_protected_exports_* || true
+          repo sync
+          rm kernel_platform/common/android/abi_gki_protected_exports_* || echo "No protected exports!"
+          rm kernel_platform/msm-kernel/android/abi_gki_protected_exports_* || echo "No protected exports!"
           sed -i 's/ -dirty//g' kernel_platform/common/scripts/setlocalversion
           sed -i 's/ -dirty//g' kernel_platform/msm-kernel/scripts/setlocalversion
           sed -i 's/ -dirty//g' kernel_platform/external/dtc/scripts/setlocalversion
 
-      - name: Set SukiSU branch flag
+      - name: SukiSU-Ultra & SukiSU version
         if: ${{ env.KERNELSU_VARIANT == 'SukiSU-Ultra' || env.KERNELSU_VARIANT == 'SukiSU' }}
         run: |
-          if [ "${{ env.KERNELSU_VERSION }}" = "tag" ]; then
-            echo "BRANCH=-" >> "$GITHUB_ENV"
-          else
-            echo "BRANCH=-s susfs-main" >> "$GITHUB_ENV"
+          if [[ "${{ env.KERNELSU_VERSION }}" == "tag" ]]; then
+            echo "BRANCH=-" >> $GITHUB_ENV
+          elif [[ "${{ env.KERNELSU_VERSION }}" == "main" ]]; then
+            echo "BRANCH=-s susfs-main" >> $GITHUB_ENV
           fi
 
-      - name: Integrate KernelSU (SukiSU-Ultra)
+      - name: Add SukiSU-Ultra
         if: ${{ env.KERNELSU_VARIANT == 'SukiSU-Ultra' }}
+        id: ksu_version_suu
         run: |
-          set -e
           cd kernel_workspace/kernel_platform
           curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash ${{ env.BRANCH }}
-          cd KernelSU
-          git fetch --tags
-          COMMITS=$(git rev-list --count HEAD)
-          KSU_VERSION=$((40000 + COMMITS))
-          echo "KSUVER=${KSU_VERSION}" >> "$GITHUB_ENV"
-          echo "KSU_VERSION=${KSU_VERSION}" >> "$GITHUB_ENV"
+          cd ./KernelSU
+          # Жёстко задаём версию под менеджер v4.0.0 (40137),
+          # чтобы ядро и ksud совпадали для ReZygisk и других модулей.
+          KSU_VERSION=40137
+          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+          echo "ksuuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+          export KSU_VERSION
+          sed -i "s/DKSU_VERSION=12800/DKSU_VERSION=${KSU_VERSION}/" kernel/Makefile
 
-      - name: Apply SUSFS patches
+      - name: Add SukiSU
+        if: ${{ env.KERNELSU_VARIANT == 'SukiSU' }}
+        id: ksu_version_su
+        run: |
+          cd kernel_workspace/kernel_platform
+          curl -LSs "https://raw.githubusercontent.com/ShirkNeko/KernelSU/main/kernel/setup.sh" | bash ${{ env.BRANCH }}
+          cd ./KernelSU
+          # Для обычного SukiSU оставляем динамический расчёт
+          KSU_VERSION=$(expr $(/usr/bin/git rev-list --count HEAD) "+" 10606)
+          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+          echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+          export KSU_VERSION
+          sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" kernel/Makefile
+
+      - name: Apply SUSFS Patches SukiSU
         if: ${{ env.SUSFS_ENABLED == 'true' }}
         run: |
-          set -e
           cd kernel_workspace
           git clone https://github.com/ShirkNeko/susfs4ksu.git -b gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
           cd kernel_platform
+
+          # Copy SUSFS patches
           cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
           cp ../susfs4ksu/kernel_patches/fs/* ./common/fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
-          cd common
+
+          echo "正在给内核打susfs补丁"
+          cd ./common
           patch -p1 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
+          echo "完成"
 
-      - name: Apply VFS hooks
-        if: ${{ env.VFS_patch_ENABLED == 'enable' }}
+      - name: Apply Hide Stuff Patches
         run: |
-          set -e
           cd kernel_workspace/kernel_platform/common
-          cp ../../SukiSU_patch/hooks/scope_min_manual_hooks_v1.6.patch ./
-          patch -p1 -F 3 < scope_min_manual_hooks_v1.6.patch || true
+          cp ../../SukiSU_patch/69_hide_stuff.patch ./
+          echo "Applying hide_stuff patch"
+          patch -p1 -F 3 < 69_hide_stuff.patch
 
-      - name: Append KSU/SUSFS configs
+      - name: Add SUSFS Configuration Settings
         run: |
-          set -e
           cd kernel_workspace/kernel_platform
-          CFG=./common/arch/arm64/configs/gki_defconfig
+          # KSU
+          echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
+          if [[ "${{ env.KERNELSU_VARIANT }}" == "SukiSU-Ultra" ]]; then
+            echo "CONFIG_KPM=y" >> ./common/arch/arm64/configs/gki_defconfig
+          fi
+
+          # SUSFS
           {
-            echo "CONFIG_KSU=y"
-            [ "${{ env.KERNELSU_VARIANT }}" = "SukiSU-Ultra" ] && echo "CONFIG_KPM=y"
-            if [ "${{ env.VFS_patch_ENABLED }}" = "enable" ]; then
-              echo "CONFIG_KSU_SUSFS_SUS_SU=n"
-              echo "CONFIG_KSU_MANUAL_HOOK=y"
-            else
-              echo "CONFIG_KSU_SUSFS_SUS_SU=y"
-            fi
             echo "CONFIG_KSU_SUSFS=y"
             echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y"
             echo "CONFIG_KSU_SUSFS_SUS_PATH=y"
@@ -133,62 +152,81 @@ jobs:
             echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y"
             echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y"
             echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y"
-          } >> "$CFG"
+          } >> ./common/arch/arm64/configs/gki_defconfig
+
+          # Remove check_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      - name: Set build name
+      - name: Add make name
         run: |
           cd kernel_workspace/kernel_platform
-          if [ "${{ env.KERNEL_VERSION }}" = "6.1" ] || [ "${{ env.KERNEL_VERSION }}" = "6.6" ]; then
-            sed -i '/stable_scmversion_cmd/s/-maybe-dirty//g' ./build/kernel/kleaf/impl/stamp.bzl
+          if [[ "${{ env.KERNEL_VERSION }}" == "6.1" || "${{ env.KERNEL_VERSION }}" == "6.6" ]]; then
+            sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
           fi
           sed -i '$s|echo "\$res"|echo "\${{ env.KERNEL_NAME }}"|' ./common/scripts/setlocalversion
 
       - name: Build kernel
         run: |
-          set -e
           cd kernel_workspace
-          if [ "${{ env.KERNEL_VERSION }}" = "6.1" ] || [ "${{ env.KERNEL_VERSION }}" = "6.6" ]; then
+          if [[ "${{ env.KERNEL_VERSION }}" == "6.1" || "${{ env.KERNEL_VERSION }}" == "6.6" ]]; then
             ./kernel_platform/build_with_bazel.py -t ${{ env.CPUD }} gki --action_env=KSU_VERSION
           else
             LTO=thin ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ env.CPUD }} gki
           fi
 
-      - name: Collect Image
+      - name: Make AnyKernel3
         run: |
-          set -e
           git clone https://github.com/Kernel-SU/AnyKernel3 --depth=1
           rm -rf ./AnyKernel3/.git
           dir1="./kernel_workspace/kernel_platform/out/msm-kernel-${{ env.CPUD }}-gki/dist/"
-          image_path=$(find ./kernel_workspace/kernel_platform -name Image | head -n 1)
-          if [ -n "$image_path" ]; then
+          dir2="./kernel_workspace/kernel_platform/common/out/arch/arm64/boot/"
+          dir3="./kernel_workspace/kernel_platform/out/msm-${{ env.CPUD }}-${{ env.CPUD }}-gki/dist/"
+          target1="./AnyKernel3/"
+          target2="./kernel_workspace/kernel"
+
+          if find "$dir1" -name "Image" | grep -q "Image"; then
+            image_path="${dir1}Image"
+          elif find "$dir2" -name "Image" | grep -q "Image"; then
+            image_path="${dir2}Image"
+          elif find "$dir3" -name "Image" | grep -q "Image"; then
+            image_path="${dir3}Image"
+          else
+            image_path=$(find "./kernel_workspace/kernel_platform/common/out/" -name "Image" | head -n 1)
+          fi
+
+          if [ -n "$image_path" ] && [ -f "$image_path" ]; then
             mkdir -p "$dir1"
             if [ "$(realpath "$image_path")" != "$(realpath "${dir1}Image")" ]; then
-              cp -f "$image_path" "${dir1}Image"
+              cp "$image_path" "$dir1"
             else
-              echo "Image уже в целевом каталоге — пропуск копирования"
+              echo "源文件与目标相同，跳过复制"
             fi
           else
-            echo "Image не найден"
+            echo "未找到 Image 文件，构建可能失败"
             exit 1
           fi
 
-      - name: Apply patch_linux and export Image (Ultra)
+      - name: Apply patch_linux and replace Image (SukiSU-Ultra)
         if: ${{ env.KERNELSU_VARIANT == 'SukiSU-Ultra' }}
         run: |
-          set -e
           cd kernel_workspace/kernel_platform/out/msm-kernel-${{ env.CPUD }}-gki/dist
           curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o patch_linux
           chmod +x patch_linux
           ./patch_linux
+          rm -f Image
           mv oImage Image
           cp Image $GITHUB_WORKSPACE/AnyKernel3/Image
-          mkdir -p $GITHUB_WORKSPACE/kernel_workspace/kernel
           cp Image $GITHUB_WORKSPACE/kernel_workspace/kernel
 
-      - name: Package artifacts
+      - name: Reproduction of documents (SukiSU)
+        if: ${{ env.KERNELSU_VARIANT == 'SukiSU' }}
         run: |
-          set -e
+          cd kernel_workspace/kernel_platform/out/msm-kernel-${{ env.CPUD }}-gki/dist
+          cp Image $GITHUB_WORKSPACE/AnyKernel3/Image
+          cp Image $GITHUB_WORKSPACE/kernel_workspace/kernel
+
+      - name: Package artifact
+        run: |
           cd $GITHUB_WORKSPACE/AnyKernel3
           zip -r ../AnyKernel3_KernelSU_${{ env.KSUVER }}_${{ env.FEIL }}.zip ./*
           cd $GITHUB_WORKSPACE/kernel_workspace
