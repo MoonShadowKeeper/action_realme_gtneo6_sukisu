@@ -73,70 +73,69 @@ jobs:
           cd kernel_workspace/kernel_platform
           curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash ${{ env.BRANCH }}
           cd ./KernelSU
-          # Привязываем версию ядра к менеджеру v4.0.0 (40137)
           KSU_VERSION=40137
           echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
           export KSU_VERSION
           sed -i "s/DKSU_VERSION=12800/DKSU_VERSION=${KSU_VERSION}/" kernel/Makefile
 
-      - name: Apply SUSFS 2.0 (Inline Hook)
+      - name: Apply SUSFS (gki-android14-6.1)
         if: ${{ env.SUSFS_ENABLED == 'true' }}
         run: |
           cd kernel_workspace
-          git clone https://github.com/ShirkNeko/susfs4ksu.git -b susfs-v2.0
+          git clone https://github.com/ShirkNeko/susfs4ksu.git -b gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
+          git clone https://github.com/ShirkNeko/SukiSU_patch.git
           cd kernel_platform
 
-          mkdir -p ./common/fs/susfs
-          mkdir -p ./common/include/linux/susfs
+          cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
 
-          cp -r ../susfs4ksu/inline_hook/fs/susfs/* ./common/fs/susfs/
-          cp -r ../susfs4ksu/inline_hook/include/linux/susfs/* ./common/include/linux/susfs/
+          mkdir -p ./common/fs
+          mkdir -p ./common/include/linux
 
-          cp ../susfs4ksu/inline_hook/susfs_inline_hook.patch ./common/
+          cp ../susfs4ksu/kernel_patches/fs/* ./common/fs/
+          cp ../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+
           cd ./common
-          echo "Applying SUSFS 2.0 inline hook patch"
-          patch -p1 -F 3 < susfs_inline_hook.patch || true
-          echo "Done SUSFS 2.0"
+          patch -p1 -F 3 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
 
-      - name: Apply Hide Stuff Patches
+      - name: Apply Hide Stuff Patch
         run: |
-          cd kernel_workspace
-          git clone https://github.com/ShirkNeko/SukiSU_patch.git
-          cd kernel_platform/common
+          cd kernel_workspace/kernel_platform/common
           cp ../../SukiSU_patch/69_hide_stuff.patch ./
-          echo "Applying hide_stuff patch"
           patch -p1 -F 3 < 69_hide_stuff.patch
 
-      - name: Add SUSFS 2.0 Configuration
+      - name: Add SUSFS Configuration
         run: |
           cd kernel_workspace/kernel_platform
-          # KSU + KPM
           echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KPM=y" >> ./common/arch/arm64/configs/gki_defconfig
 
-          # SUSFS 2.0
-          echo "CONFIG_KSU_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_INLINE_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_MAGIC_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_HIDE_SYMBOLS=y" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n" >> ./common/arch/arm64/configs/gki_defconfig
+          {
+            echo "CONFIG_KSU_SUSFS=y"
+            echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y"
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=y"
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y"
+            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y"
+            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y"
+            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y"
+            echo "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n"
+            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y"
+            echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y"
+            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y"
+            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y"
+            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y"
+            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y"
+            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y"
+          } >> ./common/arch/arm64/configs/gki_defconfig
 
-          # Убираем check_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
       - name: Add Baseband-guard (BBG)
         if: ${{ env.BBG_ENABLED == 'true' }}
         run: |
           cd kernel_workspace/kernel_platform/msm-kernel
-          # Интеграция BBG через setup.sh (по README Baseband-guard)
           wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
-          # Включаем BBG в gki_defconfig (общий defconfig в common)
           cd ../common
           echo "CONFIG_BBG=y" >> ./arch/arm64/configs/gki_defconfig
-          # Патчим security/Kconfig, чтобы LSM по умолчанию включал baseband_guard
           cd ../msm-kernel
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/lockdown/lockdown,baseband_guard/ } }' security/Kconfig
 
@@ -158,6 +157,7 @@ jobs:
           dir1="./kernel_workspace/kernel_platform/out/msm-kernel-${{ env.CPUD }}-gki/dist/"
           dir2="./kernel_workspace/kernel_platform/common/out/arch/arm64/boot/"
           dir3="./kernel_workspace/kernel_platform/out/msm-${{ env.CPUD }}-${{ env.CPUD }}-gki/dist/"
+          target_kernel="./kernel_workspace/kernel"
 
           if find "$dir1" -name "Image" | grep -q "Image"; then
             image_path="${dir1}Image"
@@ -171,17 +171,22 @@ jobs:
 
           if [ -n "$image_path" ] && [ -f "$image_path" ]; then
             cp "$image_path" "./AnyKernel3/Image"
+            mkdir -p "$target_kernel"
+            cp "$image_path" "$target_kernel/Image"
           else
             echo "Image not found, build probably failed"
             exit 1
           fi
 
-      - name: Package artifact
+      - name: Package artifacts
         run: |
           cd ./AnyKernel3
           zip -r ../AnyKernel3_KernelSU_${{ env.KSUVER }}_${{ env.FEIL }}.zip ./*
+          cd ..
+          cd ./kernel_workspace
+          zip -r ../Image_KernelSU_${{ env.KSUVER }}_${{ env.FEIL }}.zip ./kernel
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Kernel_ZIP_Artifacts
